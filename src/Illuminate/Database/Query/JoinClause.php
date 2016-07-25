@@ -1,108 +1,100 @@
-<?php namespace Illuminate\Database\Query;
+<?php
 
-class JoinClause {
+namespace Illuminate\Database\Query;
 
-	/**
-	 * The query builder instance.
-	 *
-	 * @var \Illuminate\Database\Query\Builder
-	 */
-	public $query;
+use Closure;
 
-	/**
-	 * The type of join being performed.
-	 *
-	 * @var string
-	 */
-	public $type;
+class JoinClause extends Builder
+{
+    /**
+     * The type of join being performed.
+     *
+     * @var string
+     */
+    public $type;
 
-	/**
-	 * The table the join clause is joining to.
-	 *
-	 * @var string
-	 */
-	public $table;
+    /**
+     * The table the join clause is joining to.
+     *
+     * @var string
+     */
+    public $table;
 
-	/**
-	 * The "on" clauses for the join.
-	 *
-	 * @var array
-	 */
-	public $clauses = array();
+    /**
+     * The parent query builder instance.
+     *
+     * @var \Illuminate\Database\Query\Builder
+     */
+    private $parentQuery;
 
-	/**
-	 * Create a new join clause instance.
-	 *
-	 * @param  \Illuminate\Database\Query\Builder  $query
-	 * @param  string  $type
-	 * @param  string  $table
-	 * @return void
-	 */
-	public function __construct(Builder $query, $type, $table)
-	{
-		$this->type = $type;
-		$this->query = $query;
-		$this->table = $table;
-	}
+    /**
+     * Create a new join clause instance.
+     *
+     * @param  \Illuminate\Database\Query\Builder $parentQuery
+     * @param  string  $type
+     * @param  string  $table
+     * @return void
+     */
+    public function __construct(Builder $parentQuery, $type, $table)
+    {
+        $this->type = $type;
+        $this->table = $table;
+        $this->parentQuery = $parentQuery;
 
-	/**
-	 * Add an "on" clause to the join.
-	 *
-	 * @param  string  $first
-	 * @param  string  $operator
-	 * @param  string  $second
-	 * @param  string  $boolean
-	 * @param  bool  $where
-	 * @return \Illuminate\Database\Query\JoinClause
-	 */
-	public function on($first, $operator, $second, $boolean = 'and', $where = false)
-	{
-		$this->clauses[] = compact('first', 'operator', 'second', 'boolean', 'where');
+        parent::__construct(
+            $parentQuery->connection, $parentQuery->grammar, $parentQuery->processor
+        );
+    }
 
-		if ($where) $this->query->addBinding($second, 'join');
+    /**
+     * Add an "on" clause to the join.
+     *
+     * On clauses can be chained, e.g.
+     *
+     *  $join->on('contacts.user_id', '=', 'users.id')
+     *       ->on('contacts.info_id', '=', 'info.id')
+     *
+     * will produce the following SQL:
+     *
+     * on `contacts`.`user_id` = `users`.`id`  and `contacts`.`info_id` = `info`.`id`
+     *
+     * @param  \Closure|string  $first
+     * @param  string|null  $operator
+     * @param  string|null  $second
+     * @param  string  $boolean
+     * @return $this
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function on($first, $operator = null, $second = null, $boolean = 'and')
+    {
+        if ($first instanceof Closure) {
+            return $this->whereNested($first, $boolean);
+        }
 
-		return $this;
-	}
+        return $this->whereColumn($first, $operator, $second, $boolean);
+    }
 
-	/**
-	 * Add an "or on" clause to the join.
-	 *
-	 * @param  string  $first
-	 * @param  string  $operator
-	 * @param  string  $second
-	 * @return \Illuminate\Database\Query\JoinClause
-	 */
-	public function orOn($first, $operator, $second)
-	{
-		return $this->on($first, $operator, $second, 'or');
-	}
+    /**
+     * Add an "or on" clause to the join.
+     *
+     * @param  \Closure|string  $first
+     * @param  string|null  $operator
+     * @param  string|null  $second
+     * @return \Illuminate\Database\Query\JoinClause
+     */
+    public function orOn($first, $operator = null, $second = null)
+    {
+        return $this->on($first, $operator, $second, 'or');
+    }
 
-	/**
-	 * Add an "on where" clause to the join.
-	 *
-	 * @param  string  $first
-	 * @param  string  $operator
-	 * @param  string  $second
-	 * @param  string  $boolean
-	 * @return \Illuminate\Database\Query\JoinClause
-	 */
-	public function where($first, $operator, $second, $boolean = 'and')
-	{
-		return $this->on($first, $operator, $second, $boolean, true);
-	}
-
-	/**
-	 * Add an "or on where" clause to the join.
-	 *
-	 * @param  string  $first
-	 * @param  string  $operator
-	 * @param  string  $second
-	 * @param  string  $boolean
-	 * @return \Illuminate\Database\Query\JoinClause
-	 */
-	public function orWhere($first, $operator, $second)
-	{
-		return $this->on($first, $operator, $second, 'or', true);
-	}
-
+    /**
+     * Get a new instance of the join clause builder.
+     *
+     * @return \Illuminate\Database\Query\JoinClause
+     */
+    public function newQuery()
+    {
+        return new static($this->parentQuery, $this->type, $this->table);
+    }
 }

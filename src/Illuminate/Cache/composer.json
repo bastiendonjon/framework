@@ -1,6 +1,12 @@
 {
     "name": "illuminate/cache",
+    "description": "The Illuminate Cache package.",
     "license": "MIT",
+    "homepage": "http://laravel.com",
+    "support": {
+        "issues": "https://github.com/laravel/framework/issues",
+        "source": "https://github.com/laravel/framework"
+    },
     "authors": [
         {
             "name": "Taylor Otwell",
@@ -8,15 +14,10 @@
         }
     ],
     "require": {
-        "php": ">=5.4.0",
-        "illuminate/support": "4.3.*",
-        "nesbot/carbon": "~1.0"
-    },
-    "require-dev": {
-        "illuminate/database": "4.3.*",
-        "illuminate/encryption": "4.3.*",
-        "illuminate/filesystem": "4.3.*",
-        "illuminate/redis": "4.3.*"
+        "php": ">=5.6.4",
+        "illuminate/contracts": "5.4.*",
+        "illuminate/support": "5.4.*",
+        "nesbot/carbon": "~1.20"
     },
     "autoload": {
         "psr-4": {
@@ -25,8 +26,13 @@
     },
     "extra": {
         "branch-alias": {
-            "dev-master": "4.3-dev"
+            "dev-master": "5.4-dev"
         }
+    },
+    "suggest": {
+        "illuminate/database": "Required to use the database cache driver (5.4.*).",
+        "illuminate/filesystem": "Required to use the file cache driver (5.4.*).",
+        "illuminate/redis": "Required to use the redis cache driver (5.4.*)."
     },
     "minimum-stability": "dev"
 }

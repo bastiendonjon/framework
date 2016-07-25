@@ -1,180 +1,209 @@
-<?php namespace Illuminate\Queue\Console;
+<?php
 
+namespace Illuminate\Queue\Console;
+
+use Carbon\Carbon;
 use Illuminate\Queue\Worker;
-use Illuminate\Queue\Jobs\Job;
 use Illuminate\Console\Command;
+use Illuminate\Queue\WorkerOptions;
+use Illuminate\Contracts\Queue\Job;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessed;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Input\InputArgument;
-use Symfony\Component\Console\Output\OutputInterface;
 
-class WorkCommand extends Command {
+class WorkCommand extends Command
+{
+    /**
+     * The console command name.
+     *
+     * @var string
+     */
+    protected $name = 'queue:work';
 
-	/**
-	 * The console command name.
-	 *
-	 * @var string
-	 */
-	protected $name = 'queue:work';
+    /**
+     * The console command description.
+     *
+     * @var string
+     */
+    protected $description = 'Process the next job on a queue';
 
-	/**
-	 * The console command description.
-	 *
-	 * @var string
-	 */
-	protected $description = 'Process the next job on a queue';
+    /**
+     * The queue worker instance.
+     *
+     * @var \Illuminate\Queue\Worker
+     */
+    protected $worker;
 
-	/**
-	 * The queue listener instance.
-	 *
-	 * @var \Illuminate\Queue\Listener
-	 */
-	protected $worker;
+    /**
+     * Create a new queue listen command.
+     *
+     * @param  \Illuminate\Queue\Worker  $worker
+     * @return void
+     */
+    public function __construct(Worker $worker)
+    {
+        parent::__construct();
 
-	/**
-	 * Create a new queue listen command.
-	 *
-	 * @param  \Illuminate\Queue\Worker  $worker
-	 * @return void
-	 */
-	public function __construct(Worker $worker)
-	{
-		parent::__construct();
+        $this->worker = $worker;
+    }
 
-		$this->worker = $worker;
-	}
+    /**
+     * Execute the console command.
+     *
+     * @return void
+     */
+    public function fire()
+    {
+        if ($this->downForMaintenance() && $this->option('once')) {
+            return $this->worker->sleep($this->option('sleep'));
+        }
 
-	/**
-	 * Execute the console command.
-	 *
-	 * @return void
-	 */
-	public function fire()
-	{
-		if ($this->downForMaintenance() && ! $this->option('daemon')) return;
+        // We'll listen to the processed and failed events so we can write information
+        // to the console as jobs are processed, which will let the developer watch
+        // which jobs are coming through a queue and be informed on its progress.
+        $this->listenForEvents();
 
-		$queue = $this->option('queue');
+        $connection = $this->argument('connection')
+                        ?: $this->laravel['config']['queue.default'];
 
-		$delay = $this->option('delay');
+        // We need to get the right queue for the connection which is set in the queue
+        // configuration file for the application. We will pull it based on the set
+        // connection being run for the queue operation currently being executed.
+        $queue = $this->option('queue') ?: $this->laravel['config']->get(
+            "queue.connections.{$connection}.queue", 'default'
+        );
 
-		// The memory limit is the amount of memory we will allow the script to occupy
-		// before killing it and letting a process manager restart it for us, which
-		// is to protect us against any memory leaks that will be in the scripts.
-		$memory = $this->option('memory');
+        $response = $this->runWorker(
+            $connection, $queue
+        );
+    }
 
-		$connection = $this->argument('connection');
+    /**
+     * Run the worker instance.
+     *
+     * @param  string  $connection
+     * @param  string  $queue
+     * @return array
+     */
+    protected function runWorker($connection, $queue)
+    {
+        $this->worker->setCache($this->laravel['cache']->driver());
 
-		$response = $this->runWorker(
-			$connection, $queue, $delay, $memory, $this->option('daemon')
-		);
+        $method = $this->option('once') ? 'runNextJob' : 'daemon';
 
-		// If a job was fired by the worker, we'll write the output out to the console
-		// so that the developer can watch live while the queue runs in the console
-		// window, which will also of get logged if stdout is logged out to disk.
-		if ( ! is_null($response['job']))
-		{
-			$this->writeOutput($response['job'], $response['failed']);
-		}
-	}
+        return $this->worker->{$method}(
+            $connection, $queue, $this->gatherWorkerOptions()
+        );
+    }
 
-	/**
-	 * Run the worker instance.
-	 *
-	 * @param  string  $connection
-	 * @param  string  $queue
-	 * @param  int  $delay
-	 * @param  int  $memory
-	 * @param  bool  $daemon
-	 * @return array
-	 */
-	protected function runWorker($connection, $queue, $delay, $memory, $daemon = false)
-	{
-		if ($daemon)
-		{
-			$this->worker->setCache($this->laravel['cache']->driver());
+    /**
+     * Gather all of the queue worker options as a single object.
+     *
+     * @return \Illuminate\Queue\WorkerOptions
+     */
+    protected function gatherWorkerOptions()
+    {
+        return new WorkerOptions(
+            $this->option('delay'), $this->option('memory'),
+            $this->option('timeout', 60), $this->option('sleep'),
+            $this->option('tries')
+        );
+    }
 
-			$this->worker->setDaemonExceptionHandler($this->laravel['exception']);
+    /**
+     * Listen for the queue events in order to update the console output.
+     *
+     * @return void
+     */
+    protected function listenForEvents()
+    {
+        $this->laravel['events']->listen(JobProcessed::class, function ($event) {
+            $this->writeOutput($event->job, false);
+        });
 
-			return $this->worker->daemon(
-				$connection, $queue, $delay, $memory,
-				$this->option('sleep'), $this->option('tries')
-			);
-		}
-		else
-		{
-			return $this->worker->pop(
-				$connection, $queue, $delay,
-				$this->option('sleep'), $this->option('tries')
-			);
-		}
-	}
+        $this->laravel['events']->listen(JobFailed::class, function ($event) {
+            $this->writeOutput($event->job, true);
 
-	/**
-	 * Write the status output for the queue worker.
-	 *
-	 * @param  \Illuminate\Queue\Jobs\Job  $job
-	 * @param  bool  $failed
-	 * @return void
-	 */
-	protected function writeOutput(Job $job, $failed)
-	{
-		$options = OutputInterface::OUTPUT_RAW;
+            $this->logFailedJob($event);
+        });
+    }
 
-		if ($failed)
-		{
-			$this->output->writeln('<error>Failed:</error> '.$job->getName(), $options);
-		}
-		else
-		{
-			$this->output->writeln('<info>Processed:</info> '.$job->getName(), $options);
-		}
-	}
+    /**
+     * Write the status output for the queue worker.
+     *
+     * @param  \Illuminate\Contracts\Queue\Job  $job
+     * @param  bool  $failed
+     * @return void
+     */
+    protected function writeOutput(Job $job, $failed)
+    {
+        if ($failed) {
+            $this->output->writeln('<error>['.Carbon::now()->format('Y-m-d H:i:s').'] Failed:</error> '.$job->resolveName());
+        } else {
+            $this->output->writeln('<info>['.Carbon::now()->format('Y-m-d H:i:s').'] Processed:</info> '.$job->resolveName());
+        }
+    }
 
-	/**
-	 * Determine if the worker should run in maintenance mode.
-	 *
-	 * @return bool
-	 */
-	protected function downForMaintenance()
-	{
-		if ($this->option('force')) return false;
+    /**
+     * Store a failed job event.
+     *
+     * @param  JobFailed  $event
+     * @return void
+     */
+    protected function logFailedJob(JobFailed $event)
+    {
+        $this->laravel['queue.failer']->log(
+            $event->connectionName, $event->job->getQueue(),
+            $event->job->getRawBody(), $event->exception
+        );
+    }
 
-		return $this->laravel->isDownForMaintenance();
-	}
+    /**
+     * Determine if the worker should run in maintenance mode.
+     *
+     * @return bool
+     */
+    protected function downForMaintenance()
+    {
+        return $this->option('force') ? false : $this->laravel->isDownForMaintenance();
+    }
 
-	/**
-	 * Get the console command arguments.
-	 *
-	 * @return array
-	 */
-	protected function getArguments()
-	{
-		return array(
-			array('connection', InputArgument::OPTIONAL, 'The name of connection', null),
-		);
-	}
+    /**
+     * Get the console command arguments.
+     *
+     * @return array
+     */
+    protected function getArguments()
+    {
+        return [
+            ['connection', InputArgument::OPTIONAL, 'The name of connection', null],
+        ];
+    }
 
-	/**
-	 * Get the console command options.
-	 *
-	 * @return array
-	 */
-	protected function getOptions()
-	{
-		return array(
-			array('queue', null, InputOption::VALUE_OPTIONAL, 'The queue to listen on'),
+    /**
+     * Get the console command options.
+     *
+     * @return array
+     */
+    protected function getOptions()
+    {
+        return [
+            ['queue', null, InputOption::VALUE_OPTIONAL, 'The queue to listen on'],
 
-			array('daemon', null, InputOption::VALUE_NONE, 'Run the worker in daemon mode'),
+            ['once', null, InputOption::VALUE_NONE, 'Only process the next job on the queue'],
 
-			array('delay', null, InputOption::VALUE_OPTIONAL, 'Amount of time to delay failed jobs', 0),
+            ['delay', null, InputOption::VALUE_OPTIONAL, 'Amount of time to delay failed jobs', 0],
 
-			array('force', null, InputOption::VALUE_NONE, 'Force the worker to run even in maintenance mode'),
+            ['force', null, InputOption::VALUE_NONE, 'Force the worker to run even in maintenance mode'],
 
-			array('memory', null, InputOption::VALUE_OPTIONAL, 'The memory limit in megabytes', 128),
+            ['memory', null, InputOption::VALUE_OPTIONAL, 'The memory limit in megabytes', 128],
 
-			array('sleep', null, InputOption::VALUE_OPTIONAL, 'Number of seconds to sleep when no job is available', 3),
+            ['sleep', null, InputOption::VALUE_OPTIONAL, 'Number of seconds to sleep when no job is available', 3],
 
-			array('tries', null, InputOption::VALUE_OPTIONAL, 'Number of times to attempt a job before logging it failed', 0),
-		);
-	}
+            ['timeout', null, InputOption::VALUE_OPTIONAL, 'The number of seconds a child process can run', 60],
 
+            ['tries', null, InputOption::VALUE_OPTIONAL, 'Number of times to attempt a job before logging it failed', 0],
+        ];
+    }
 }

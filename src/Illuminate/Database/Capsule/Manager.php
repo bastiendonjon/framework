@@ -1,286 +1,201 @@
-<?php namespace Illuminate\Database\Capsule;
+<?php
+
+namespace Illuminate\Database\Capsule;
 
 use PDO;
-use Illuminate\Support\Fluent;
-use Illuminate\Events\Dispatcher;
-use Illuminate\Cache\CacheManager;
 use Illuminate\Container\Container;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Support\Traits\CapsuleManagerTrait;
 use Illuminate\Database\Eloquent\Model as Eloquent;
 use Illuminate\Database\Connectors\ConnectionFactory;
 
-class Manager {
+class Manager
+{
+    use CapsuleManagerTrait;
 
-	/**
-	 * The current globally used instance.
-	 *
-	 * @var \Illuminate\Database\Capsule\Manager
-	 */
-	protected static $instance;
+    /**
+     * The database manager instance.
+     *
+     * @var \Illuminate\Database\DatabaseManager
+     */
+    protected $manager;
 
-	/**
-	 * The database manager instance.
-	 *
-	 * @var \Illuminate\Database\DatabaseManager
-	 */
-	protected $manager;
+    /**
+     * Create a new database capsule manager.
+     *
+     * @param  \Illuminate\Container\Container|null  $container
+     * @return void
+     */
+    public function __construct(Container $container = null)
+    {
+        $this->setupContainer($container ?: new Container);
 
-	/**
-	 * The container instance.
-	 *
-	 * @var \Illuminate\Container\Container
-	 */
-	protected $container;
+        // Once we have the container setup, we will setup the default configuration
+        // options in the container "config" binding. This will make the database
+        // manager work correctly out of the box without extreme configuration.
+        $this->setupDefaultConfiguration();
 
-	/**
-	 * Create a new database capsule manager.
-	 *
-	 * @param  \Illuminate\Container\Container|null  $container
-	 * @return void
-	 */
-	public function __construct(Container $container = null)
-	{
-		$this->setupContainer($container);
+        $this->setupManager();
+    }
 
-		// Once we have the container setup, we will setup the default configuration
-		// options in the container "config" binding. This will make the database
-		// manager behave correctly since all the correct binding are in place.
-		$this->setupDefaultConfiguration();
+    /**
+     * Setup the default database configuration options.
+     *
+     * @return void
+     */
+    protected function setupDefaultConfiguration()
+    {
+        $this->container['config']['database.fetch'] = PDO::FETCH_OBJ;
 
-		$this->setupManager();
-	}
+        $this->container['config']['database.default'] = 'default';
+    }
 
-	/**
-	 * Setup the IoC container instance.
-	 *
-	 * @param  \Illuminate\Container\Container|null  $container
-	 * @return void
-	 */
-	protected function setupContainer($container)
-	{
-		$this->container = $container ?: new Container;
+    /**
+     * Build the database manager instance.
+     *
+     * @return void
+     */
+    protected function setupManager()
+    {
+        $factory = new ConnectionFactory($this->container);
 
-		if ( ! $this->container->bound('config'))
-		{
-			$this->container->instance('config', new Fluent);
-		}
-	}
+        $this->manager = new DatabaseManager($this->container, $factory);
+    }
 
-	/**
-	 * Setup the default database configuration options.
-	 *
-	 * @return void
-	 */
-	protected function setupDefaultConfiguration()
-	{
-		$this->container['config']['database.fetch'] = PDO::FETCH_ASSOC;
+    /**
+     * Get a connection instance from the global manager.
+     *
+     * @param  string  $connection
+     * @return \Illuminate\Database\Connection
+     */
+    public static function connection($connection = null)
+    {
+        return static::$instance->getConnection($connection);
+    }
 
-		$this->container['config']['database.default'] = 'default';
-	}
+    /**
+     * Get a fluent query builder instance.
+     *
+     * @param  string  $table
+     * @param  string  $connection
+     * @return \Illuminate\Database\Query\Builder
+     */
+    public static function table($table, $connection = null)
+    {
+        return static::$instance->connection($connection)->table($table);
+    }
 
-	/**
-	 * Build the database manager instance.
-	 *
-	 * @return void
-	 */
-	protected function setupManager()
-	{
-		$factory = new ConnectionFactory($this->container);
+    /**
+     * Get a schema builder instance.
+     *
+     * @param  string  $connection
+     * @return \Illuminate\Database\Schema\Builder
+     */
+    public static function schema($connection = null)
+    {
+        return static::$instance->connection($connection)->getSchemaBuilder();
+    }
 
-		$this->manager = new DatabaseManager($this->container, $factory);
-	}
+    /**
+     * Get a registered connection instance.
+     *
+     * @param  string  $name
+     * @return \Illuminate\Database\Connection
+     */
+    public function getConnection($name = null)
+    {
+        return $this->manager->connection($name);
+    }
 
-	/**
-	 * Get a connection instance from the global manager.
-	 *
-	 * @param  string  $connection
-	 * @return \Illuminate\Database\Connection
-	 */
-	public static function connection($connection = null)
-	{
-		return static::$instance->getConnection($connection);
-	}
+    /**
+     * Register a connection with the manager.
+     *
+     * @param  array   $config
+     * @param  string  $name
+     * @return void
+     */
+    public function addConnection(array $config, $name = 'default')
+    {
+        $connections = $this->container['config']['database.connections'];
 
-	/**
-	 * Get a fluent query builder instance.
-	 *
-	 * @param  string  $table
-	 * @param  string  $connection
-	 * @return \Illuminate\Database\Query\Builder
-	 */
-	public static function table($table, $connection = null)
-	{
-		return static::$instance->connection($connection)->table($table);
-	}
+        $connections[$name] = $config;
 
-	/**
-	 * Get a schema builder instance.
-	 *
-	 * @param  string  $connection
-	 * @return \Illuminate\Database\Schema\Builder
-	 */
-	public static function schema($connection = null)
-	{
-		return static::$instance->connection($connection)->getSchemaBuilder();
-	}
+        $this->container['config']['database.connections'] = $connections;
+    }
 
-	/**
-	 * Get a registered connection instance.
-	 *
-	 * @param  string  $name
-	 * @return \Illuminate\Database\Connection
-	 */
-	public function getConnection($name = null)
-	{
-		return $this->manager->connection($name);
-	}
+    /**
+     * Bootstrap Eloquent so it is ready for usage.
+     *
+     * @return void
+     */
+    public function bootEloquent()
+    {
+        Eloquent::setConnectionResolver($this->manager);
 
-	/**
-	 * Register a connection with the manager.
-	 *
-	 * @param  array   $config
-	 * @param  string  $name
-	 * @return void
-	 */
-	public function addConnection(array $config, $name = 'default')
-	{
-		$connections = $this->container['config']['database.connections'];
+        // If we have an event dispatcher instance, we will go ahead and register it
+        // with the Eloquent ORM, allowing for model callbacks while creating and
+        // updating "model" instances; however, it is not necessary to operate.
+        if ($dispatcher = $this->getEventDispatcher()) {
+            Eloquent::setEventDispatcher($dispatcher);
+        }
+    }
 
-		$connections[$name] = $config;
+    /**
+     * Set the fetch mode for the database connections.
+     *
+     * @param  int  $fetchMode
+     * @return $this
+     */
+    public function setFetchMode($fetchMode)
+    {
+        $this->container['config']['database.fetch'] = $fetchMode;
 
-		$this->container['config']['database.connections'] = $connections;
-	}
+        return $this;
+    }
 
-	/**
-	 * Bootstrap Eloquent so it is ready for usage.
-	 *
-	 * @return void
-	 */
-	public function bootEloquent()
-	{
-		Eloquent::setConnectionResolver($this->manager);
+    /**
+     * Get the database manager instance.
+     *
+     * @return \Illuminate\Database\DatabaseManager
+     */
+    public function getDatabaseManager()
+    {
+        return $this->manager;
+    }
 
-		// If we have an event dispatcher instance, we will go ahead and register it
-		// with the Eloquent ORM, allowing for model callbacks while creating and
-		// updating "model" instances; however, if it not necessary to operate.
-		if ($dispatcher = $this->getEventDispatcher())
-		{
-			Eloquent::setEventDispatcher($dispatcher);
-		}
-	}
+    /**
+     * Get the current event dispatcher instance.
+     *
+     * @return \Illuminate\Contracts\Events\Dispatcher|null
+     */
+    public function getEventDispatcher()
+    {
+        if ($this->container->bound('events')) {
+            return $this->container['events'];
+        }
+    }
 
-	/**
-	 * Set the fetch mode for the database connections.
-	 *
-	 * @param  int  $fetchMode
-	 * @return \Illuminate\Database\Capsule\Manager
-	 */
-	public function setFetchMode($fetchMode)
-	{
-		$this->container['config']['database.fetch'] = $fetchMode;
+    /**
+     * Set the event dispatcher instance to be used by connections.
+     *
+     * @param  \Illuminate\Contracts\Events\Dispatcher  $dispatcher
+     * @return void
+     */
+    public function setEventDispatcher(Dispatcher $dispatcher)
+    {
+        $this->container->instance('events', $dispatcher);
+    }
 
-		return $this;
-	}
-
-	/**
-	 * Make this capsule instance available globally.
-	 *
-	 * @return void
-	 */
-	public function setAsGlobal()
-	{
-		static::$instance = $this;
-	}
-
-	/**
-	 * Get the database manager instance.
-	 *
-	 * @return \Illuminate\Database\Manager
-	 */
-	public function getDatabaseManager()
-	{
-		return $this->manager;
-	}
-
-	/**
-	 * Get the current event dispatcher instance.
-	 *
-	 * @return \Illuminate\Events\Dispatcher
-	 */
-	public function getEventDispatcher()
-	{
-		if ($this->container->bound('events'))
-		{
-			return $this->container['events'];
-		}
-	}
-
-	/**
-	 * Set the event dispatcher instance to be used by connections.
-	 *
-	 * @param  \Illuminate\Events\Dispatcher  $dispatcher
-	 * @return void
-	 */
-	public function setEventDispatcher(Dispatcher $dispatcher)
-	{
-		$this->container->instance('events', $dispatcher);
-	}
-
-	/**
-	 * Get the current cache manager instance.
-	 *
-	 * @return \Illuminate\Cache\Manager
-	 */
-	public function getCacheManager()
-	{
-		if ($this->container->bound('cache'))
-		{
-			return $this->container['cache'];
-		}
-	}
-
-	/**
-	 * Set the cache manager to be used by connections.
-	 *
-	 * @param  \Illuminate\Cache\CacheManager  $cache
-	 * @return void
-	 */
-	public function setCacheManager(CacheManager $cache)
-	{
-		$this->container->instance('cache', $cache);
-	}
-
-	/**
-	 * Get the IoC container instance.
-	 *
-	 * @return \Illuminate\Container\Container
-	 */
-	public function getContainer()
-	{
-		return $this->container;
-	}
-
-	/**
-	 * Set the IoC container instance.
-	 *
-	 * @param  \Illuminate\Container\Container  $container
-	 * @return void
-	 */
-	public function setContainer(Container $container)
-	{
-		$this->container = $container;
-	}
-
-	/**
-	 * Dynamically pass methods to the default connection.
-	 *
-	 * @param  string  $method
-	 * @param  array   $parameters
-	 * @return mixed
-	 */
-	public static function __callStatic($method, $parameters)
-	{
-		return call_user_func_array(array(static::connection(), $method), $parameters);
-	}
-
+    /**
+     * Dynamically pass methods to the default connection.
+     *
+     * @param  string  $method
+     * @param  array   $parameters
+     * @return mixed
+     */
+    public static function __callStatic($method, $parameters)
+    {
+        return call_user_func_array([static::connection(), $method], $parameters);
+    }
 }
